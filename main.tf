@@ -2,43 +2,78 @@ provider "aws" {
   region = "ap-south-1"
 }
 
-resource "aws_vpc" "jenkins_vpc" {
+resource "aws_vpc" "RSP_IOT_vpc" {
   cidr_block = "10.10.0.0/16"
-  tags = { Name = "jenkins-vpc" }
+  tags       = { Name = "RSP-IOT" }
 }
 
-resource "aws_subnet" "jenkins_subnet" {
-  vpc_id                  = aws_vpc.jenkins_vpc.id
+resource "aws_subnet" "RSP_IOT_public_subnet" {
+  vpc_id                  = aws_vpc.RSP_IOT_vpc.id
   cidr_block              = "10.10.1.0/24"
   availability_zone       = "ap-south-1a"
   map_public_ip_on_launch = true
-  tags = { Name = "jenkins-subnet" }
+  tags                    = { Name = "RSP-IOT Public Subnet" }
 }
 
-resource "aws_internet_gateway" "gw" {
-  vpc_id = aws_vpc.jenkins_vpc.id
-  tags   = { Name = "jenkins-igw" }
+resource "aws_subnet" "RSP_IOT_private_subnet" {
+  vpc_id                  = aws_vpc.RSP_IOT_vpc.id
+  cidr_block              = "10.10.2.0/24"
+  availability_zone       = "ap-south-1a"
+  map_public_ip_on_launch = false
+  tags                    = { Name = "RSP-IOT Private Subnet" }
 }
 
-resource "aws_route_table" "rt" {
-  vpc_id = aws_vpc.jenkins_vpc.id
+resource "aws_internet_gateway" "RSP_IOT_igw" {
+  vpc_id = aws_vpc.RSP_IOT_vpc.id
+  tags   = { Name = "RSP-IOT-IGW" }
+}
+
+resource "aws_eip" "RSP_IOT_nat_eip" {
+  vpc = true
+}
+
+resource "aws_nat_gateway" "RSP_IOT_nat" {
+  allocation_id = aws_eip.RSP_IOT_nat_eip.id
+  subnet_id     = aws_subnet.RSP_IOT_public_subnet.id
+  depends_on    = [aws_internet_gateway.RSP_IOT_igw]
+  tags          = { Name = "RSP-IOT-NAT-Gateway" }
+}
+
+resource "aws_route_table" "RSP_IOT_public_rt" {
+  vpc_id = aws_vpc.RSP_IOT_vpc.id
 
   route {
     cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.gw.id
+    gateway_id = aws_internet_gateway.RSP_IOT_igw.id
   }
 
-  tags = { Name = "jenkins-rt" }
+  tags = { Name = "RSP-IOT Public Route Table" }
 }
 
-resource "aws_route_table_association" "assoc" {
-  subnet_id      = aws_subnet.jenkins_subnet.id
-  route_table_id = aws_route_table.rt.id
+resource "aws_route_table_association" "RSP_IOT_public_assoc" {
+  subnet_id      = aws_subnet.RSP_IOT_public_subnet.id
+  route_table_id = aws_route_table.RSP_IOT_public_rt.id
+}
+
+resource "aws_route_table" "RSP_IOT_private_rt" {
+  vpc_id = aws_vpc.RSP_IOT_vpc.id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.RSP_IOT_nat.id
+  }
+
+  tags = { Name = "RSP-IOT Private Route Table" }
+}
+
+resource "aws_route_table_association" "RSP_IOT_private_assoc" {
+  subnet_id      = aws_subnet.RSP_IOT_private_subnet.id
+  route_table_id = aws_route_table.RSP_IOT_private_rt.id
 }
 
 resource "aws_security_group" "jenkins_sg" {
   name        = "jenkins-sg"
-  vpc_id      = aws_vpc.jenkins_vpc.id
+  vpc_id      = aws_vpc.RSP_IOT_vpc.id
   description = "Allow Jenkins traffic"
 
   ingress {
@@ -82,7 +117,7 @@ resource "aws_security_group" "jenkins_sg" {
 resource "aws_instance" "jenkins_master" {
   ami                         = "ami-0e35ddab05955cf57"
   instance_type               = "t2.medium"
-  subnet_id                   = aws_subnet.jenkins_subnet.id
+  subnet_id                   = aws_subnet.RSP_IOT_public_subnet.id
   vpc_security_group_ids      = [aws_security_group.jenkins_sg.id]
   associate_public_ip_address = true
   key_name                    = "mumbaipemkey"
@@ -101,7 +136,7 @@ resource "aws_instance" "jenkins_master" {
 resource "aws_eip" "jenkins_eip" {
   domain   = "vpc"
   instance = aws_instance.jenkins_master.id
-  depends_on = [aws_internet_gateway.gw]
+  depends_on = [aws_internet_gateway.RSP_IOT_igw]
 }
 
 data "template_file" "slave_user_data" {
@@ -118,12 +153,12 @@ resource "aws_instance" "Jenkins_slave" {
   count                       = 2
   ami                         = "ami-0e35ddab05955cf57"
   instance_type               = "t2.micro"
-  subnet_id                   = aws_subnet.jenkins_subnet.id
+  subnet_id                   = aws_subnet.RSP_IOT_private_subnet.id
   vpc_security_group_ids      = [aws_security_group.jenkins_sg.id]
-  associate_public_ip_address = true
+  associate_public_ip_address = false
   key_name                    = "mumbaipemkey"
   user_data                   = data.template_file.slave_user_data[count.index].rendered
-  depends_on                  = [aws_instance.jenkins_master, aws_eip.jenkins_eip]
+  depends_on                  = [aws_instance.jenkins_master, aws_eip.jenkins_eip, aws_nat_gateway.RSP_IOT_nat]
 
   root_block_device {
     volume_size = 30
