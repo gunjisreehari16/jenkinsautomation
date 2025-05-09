@@ -1,24 +1,24 @@
 provider "aws" {
-  region = "ap-south-1"
+  region = var.region
 }
 
 resource "aws_vpc" "RSP_IOT_vpc" {
-  cidr_block = "10.10.0.0/16"
+  cidr_block = var.vpc_cidr
   tags       = { Name = "RSP-IOT" }
 }
 
 resource "aws_subnet" "RSP_IOT_public_subnet" {
   vpc_id                  = aws_vpc.RSP_IOT_vpc.id
-  cidr_block              = "10.10.1.0/24"
-  availability_zone       = "ap-south-1a"
+  cidr_block              = var.public_subnet_cidr
+  availability_zone       = var.availability_zone
   map_public_ip_on_launch = true
   tags                    = { Name = "RSP-IOT Public Subnet" }
 }
 
 resource "aws_subnet" "RSP_IOT_private_subnet" {
   vpc_id                  = aws_vpc.RSP_IOT_vpc.id
-  cidr_block              = "10.10.2.0/24"
-  availability_zone       = "ap-south-1a"
+  cidr_block              = var.private_subnet_cidr
+  availability_zone       = var.availability_zone
   map_public_ip_on_launch = false
   tags                    = { Name = "RSP-IOT Private Subnet" }
 }
@@ -101,7 +101,7 @@ resource "aws_security_group" "jenkins_sg" {
     from_port   = 0
     to_port     = 65535
     protocol    = "tcp"
-    cidr_blocks = ["10.10.0.0/16"]
+    cidr_blocks = [var.vpc_cidr]
   }
 
   egress {
@@ -115,12 +115,12 @@ resource "aws_security_group" "jenkins_sg" {
 }
 
 resource "aws_instance" "jenkins_master" {
-  ami                         = "ami-0e35ddab05955cf57"
-  instance_type               = "t2.medium"
+  ami                         = var.jenkins_ami
+  instance_type               = var.jenkins_master_instance_type
   subnet_id                   = aws_subnet.RSP_IOT_public_subnet.id
   vpc_security_group_ids      = [aws_security_group.jenkins_sg.id]
   associate_public_ip_address = true
-  key_name                    = "mumbaipemkey"
+  key_name                    = var.key_name
   user_data                   = file("scripts/jenkins_master.sh")
 
   root_block_device {
@@ -134,13 +134,13 @@ resource "aws_instance" "jenkins_master" {
 }
 
 resource "aws_eip" "jenkins_eip" {
-  domain   = "vpc"
-  instance = aws_instance.jenkins_master.id
+  domain     = "vpc"
+  instance   = aws_instance.jenkins_master.id
   depends_on = [aws_internet_gateway.RSP_IOT_igw]
 }
 
 data "template_file" "slave_user_data" {
-  count    = 2
+  count    = var.jenkins_slave_count
   template = file("scripts/jenkins_slave.sh.tpl")
 
   vars = {
@@ -150,13 +150,13 @@ data "template_file" "slave_user_data" {
 }
 
 resource "aws_instance" "Jenkins_slave" {
-  count                       = 2
-  ami                         = "ami-0e35ddab05955cf57"
-  instance_type               = "t2.micro"
+  count                       = var.jenkins_slave_count
+  ami                         = var.jenkins_ami
+  instance_type               = var.jenkins_slave_instance_type
   subnet_id                   = aws_subnet.RSP_IOT_private_subnet.id
   vpc_security_group_ids      = [aws_security_group.jenkins_sg.id]
   associate_public_ip_address = false
-  key_name                    = "mumbaipemkey"
+  key_name                    = var.key_name
   user_data                   = data.template_file.slave_user_data[count.index].rendered
   depends_on                  = [aws_instance.jenkins_master, aws_eip.jenkins_eip, aws_nat_gateway.RSP_IOT_nat]
 
