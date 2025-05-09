@@ -64,7 +64,7 @@ import hudson.plugins.sshslaves.SSHLauncher
 def instance = Jenkins.getInstance()
 JenkinsLocationConfiguration.get().setUrl("${JENKINS_URL}")
 
-(1..2).each { i ->
+(1).each { i ->
     def name = "slave-\${i}"
     def home = "/home/jenkins-agent-\${i}"
     def launcher = new JNLPLauncher()
